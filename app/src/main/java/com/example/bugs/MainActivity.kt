@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -56,7 +58,17 @@ data class PlayerProfile(
     val zodiacSign: String
 )
 
+data class Author(
+    val name: String,
+    val photoRes: Int
+)
+
 private val courses = listOf("1 курс", "2 курс", "3 курс", "4 курс", "Магистратура")
+
+private val authors = listOf(
+    Author("Ринчиндоржиев Е. Б.", R.drawable.ic_author),
+    Author("Чудаков М.А", R.drawable.ic_author)
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -73,7 +85,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen() {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Регистрация", "Правила")
+    val tabs = listOf("Регистрация", "Правила", "Авторы")
 
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = selectedTab) {
@@ -88,6 +100,7 @@ fun MainScreen() {
         when (selectedTab) {
             0 -> RegistrationTab()
             1 -> RulesTab()
+            2 -> AuthorsTab()
         }
     }
 }
@@ -248,6 +261,33 @@ fun RulesTab() {
         },
         modifier = Modifier.fillMaxSize()
     )
+}
+
+@Composable
+fun AuthorsTab() {
+    LazyColumn(Modifier.fillMaxSize()) {
+        items(authors) { author ->
+            AuthorRow(author)
+        }
+    }
+}
+
+@Composable
+fun AuthorRow(author: Author) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Image(
+            painter = painterResource(author.photoRes),
+            contentDescription = "Фото",
+            modifier = Modifier.size(56.dp)
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(author.name, fontSize = 18.sp)
+    }
 }
 
 private fun getZodiacInfo(day: Int, month: Int): Pair<String, Int> {
