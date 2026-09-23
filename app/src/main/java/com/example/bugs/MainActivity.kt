@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen() {
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Регистрация", "Правила", "Авторы")
+    val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
 
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = selectedTab) {
@@ -101,6 +101,7 @@ fun MainScreen() {
             0 -> RegistrationTab()
             1 -> RulesTab()
             2 -> AuthorsTab()
+            3 -> SettingsTab()
         }
     }
 }
@@ -288,6 +289,43 @@ fun AuthorRow(author: Author) {
         Spacer(Modifier.width(16.dp))
         Text(author.name, fontSize = 18.sp)
     }
+}
+
+@Composable
+fun SettingsTab() {
+    var speed by remember { mutableIntStateOf(5) }
+    var maxCockroaches by remember { mutableIntStateOf(20) }
+    var bonusInterval by remember { mutableIntStateOf(10) }
+    var roundDuration by remember { mutableIntStateOf(60) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        SettingSlider("Скорость игры", speed, 1..10, "ед.") { speed = it }
+        SettingSlider("Максимальное количество тараканов на экране", maxCockroaches, 1..50, "шт.") { maxCockroaches = it }
+        SettingSlider("Интервал появления бонусов", bonusInterval, 1..60, "сек") { bonusInterval = it }
+        SettingSlider("Длительность раунда", roundDuration, 10..300, "сек") { roundDuration = it }
+    }
+}
+
+@Composable
+fun SettingSlider(
+    label: String,
+    value: Int,
+    range: IntRange,
+    unit: String,
+    onValueChange: (Int) -> Unit
+) {
+    Text("$label: $value $unit", fontWeight = FontWeight.Bold)
+    Slider(
+        value = value.toFloat(),
+        onValueChange = { onValueChange(it.toInt()) },
+        valueRange = range.first.toFloat()..range.last.toFloat()
+    )
+    Spacer(Modifier.height(8.dp))
 }
 
 private fun getZodiacInfo(day: Int, month: Int): Pair<String, Int> {
