@@ -48,6 +48,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.bugs.ui.theme.BugsTheme
 import java.util.Calendar
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import kotlinx.coroutines.launch
 
 data class PlayerProfile(
     val fullName: String,
@@ -82,26 +85,40 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
 @Composable
 fun MainScreen() {
-    var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = selectedTab) {
+        TabRow(selectedTabIndex = pagerState.currentPage) {
             tabs.forEachIndexed { index, title ->
                 Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
+                    selected = pagerState.currentPage == index,
+                    onClick = {
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(index)
+                        }
+                    },
                     text = { Text(title) }
                 )
             }
         }
-        when (selectedTab) {
-            0 -> RegistrationTab()
-            1 -> RulesTab()
-            2 -> AuthorsTab()
-            3 -> SettingsTab()
+
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) { page ->
+            when (page) {
+                0 -> RegistrationTab()
+                1 -> RulesTab()
+                2 -> AuthorsTab()
+                3 -> SettingsTab()
+            }
         }
     }
 }
