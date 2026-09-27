@@ -7,10 +7,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,8 +37,10 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -50,6 +57,7 @@ import com.example.bugs.ui.theme.BugsTheme
 import java.util.Calendar
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class Bug(
@@ -78,11 +86,10 @@ private val courses = listOf("1 курс", "2 курс", "3 курс", "4 кур
 
 private val authors = listOf(
     Author("Ринчиндоржиев Е. Б.", R.drawable.ic_author),
-    Author("Чудаков М.А", R.drawable.ic_author)
+    Author("Чудаков М.А.", R.drawable.ic_author)
 )
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -93,46 +100,53 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-
 @Composable
 fun MainScreen() {
-    val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
-    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    // Состояние для переключения между меню и игрой
+    var isGameRunning by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = pagerState.currentPage) {
-            tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = {
-                        coroutineScope.launch {
-                            pagerState.animateScrollToPage(index)
-                        }
-                    },
-                    text = { Text(title) }
-                )
+    if (isGameRunning) {
+        GameScreen(onExit = { isGameRunning = false })
+    } else {
+        val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
+        val pagerState = rememberPagerState(pageCount = { tabs.size })
+        val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
+        Column(Modifier.fillMaxSize()) {
+            TabRow(selectedTabIndex = pagerState.currentPage) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = pagerState.currentPage == index,
+                        onClick = {
+                            coroutineScope.launch {
+                                pagerState.animateScrollToPage(index)
+                            }
+                        },
+                        text = { Text(title) }
+                    )
+                }
             }
-        }
 
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-        ) { page ->
-            when (page) {
-                0 -> RegistrationTab()
-                1 -> RulesTab()
-                2 -> AuthorsTab()
-                3 -> SettingsTab()
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) { page ->
+                when (page) {
+                    // Передаем коллбэк для запуска игры в регистрацию
+                    0 -> RegistrationTab(onStartGame = { isGameRunning = true })
+                    1 -> RulesTab()
+                    2 -> AuthorsTab()
+                    3 -> SettingsTab()
+                }
             }
         }
     }
 }
 
 @Composable
-fun RegistrationTab() {
+fun RegistrationTab(onStartGame: () -> Unit) {
     val context = LocalContext.current
     var fullName by remember { mutableStateOf("") }
     var isMale by remember { mutableStateOf(true) }
@@ -273,6 +287,99 @@ fun RegistrationTab() {
         Spacer(Modifier.height(12.dp))
         if (result.isNotEmpty()) {
             Text(result, fontSize = 16.sp, fontStyle = FontStyle.Italic)
+        }
+
+        // Кнопка перехода к игре
+        Spacer(Modifier.height(24.dp))
+        Button(
+            onClick = onStartGame,
+            modifier = Modifier.fillMaxWidth().height(56.dp)
+        ) {
+            Text("НАЧАТЬ ИГРУ", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+@Composable
+fun GameScreen(onExit: () -> Unit) {
+    var score by remember { mutableIntStateOf(0) }
+    val activeBugs = remember { mutableStateListOf<Bug>() }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null // Убирает эффект волны при клике
+            ) {
+                score -= 5 // Штраф за промах
+            }
+    ) {
+        val screenWidth = maxWidth.value
+        val screenHeight = maxHeight.value
+
+        // Верхняя панель: Очки и кнопка выхода
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Очки: $score", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Button(onClick = onExit) { Text("Выйти") }
+        }
+
+        // 1. Появление новых жуков
+        LaunchedEffect(Unit) {
+            while (true) {
+                if (activeBugs.size < 15) { // Максимальное количество жуков
+                    activeBugs.add(
+                        Bug(
+                            x = (0..(screenWidth - 50).toInt()).random().toFloat(),
+                            y = -100f, // Появляются за экраном сверху
+                            speed = (3..10).random().toFloat(),
+                            type = R.drawable.ic_author // Пока используем эту картинку, потом заменишь на жука
+                        )
+                    )
+                }
+                delay(800) // Интервал появления
+            }
+        }
+
+        // 2. Движение жуков вниз
+        LaunchedEffect(Unit) {
+            while (true) {
+                for (i in activeBugs.indices.reversed()) {
+                    val bug = activeBugs[i]
+                    val newY = bug.y + bug.speed
+                    if (newY > screenHeight + 50) {
+                        activeBugs.removeAt(i) // Удаление при выходе за экран
+                    } else {
+                        activeBugs[i] = bug.copy(y = newY)
+                    }
+                }
+                delay(16) // Частота кадров (~60 FPS)
+            }
+        }
+
+        // 3. Отрисовка насекомых и обработка попаданий
+        activeBugs.toList().forEach { bug ->
+            Image(
+                painter = painterResource(id = bug.type),
+                contentDescription = "Жук",
+                modifier = Modifier
+                    .absoluteOffset(x = bug.x.dp, y = bug.y.dp)
+                    .size(50.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        score += 10 // Начисление очков за попадание
+                        activeBugs.remove(bug)
+                    }
+            )
         }
     }
 }
