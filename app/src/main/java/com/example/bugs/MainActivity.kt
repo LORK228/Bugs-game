@@ -64,8 +64,9 @@ data class Bug(
     val id: String = java.util.UUID.randomUUID().toString(),
     val x: Float,
     val y: Float,
-    val speed: Float,
-    val type: Int // R.drawable.твоя_картинка_жука
+    val dx: Float,
+    val dy: Float,
+    val type: Int
 )
 
 data class PlayerProfile(
@@ -102,7 +103,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainScreen() {
-    // Состояния настроек (вынесли сюда, чтобы передавать в игру)
     var speedSetting by remember { mutableIntStateOf(5) }
     var maxCockroaches by remember { mutableIntStateOf(20) }
     var bonusInterval by remember { mutableIntStateOf(10) }
@@ -303,7 +303,6 @@ fun RegistrationTab(onStartGame: () -> Unit) {
             Text(result, fontSize = 16.sp, fontStyle = FontStyle.Italic)
         }
 
-        // Кнопка перехода к игре
         Spacer(Modifier.height(24.dp))
         Button(
             onClick = onStartGame,
@@ -327,7 +326,6 @@ fun GameScreen(
     var isGameOver by remember { mutableStateOf(false) }
     val activeBugs = remember { mutableStateListOf<Bug>() }
 
-    // Таймер игры
     LaunchedEffect(isGameOver) {
         if (!isGameOver) {
             while (timeLeft > 0) {
@@ -345,13 +343,12 @@ fun GameScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
-                if (!isGameOver) score -= 5 // Штраф только если игра идет
+                if (!isGameOver) score -= 5
             }
     ) {
         val screenWidth = maxWidth.value
         val screenHeight = maxHeight.value
 
-        // Верхняя панель: Очки, Таймер и Выход
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -364,41 +361,54 @@ fun GameScreen(
             Button(onClick = onExit) { Text("Выйти") }
         }
 
-        // Спавн жуков (с учетом настроек)
         LaunchedEffect(isGameOver) {
             while (!isGameOver) {
                 if (activeBugs.size < maxCockroaches) {
-                    val baseSpeed = speedSetting.toFloat()
+                    val speed = speedSetting.toFloat() + (0..3).random().toFloat()
+                    val dirX = if (java.util.Random().nextBoolean()) 1f else -1f
+                    val dirY = if (java.util.Random().nextBoolean()) 1f else -1f
+
                     activeBugs.add(
                         Bug(
                             x = (0..(screenWidth - 50).toInt()).random().toFloat(),
-                            y = -100f,
-                            speed = baseSpeed + (0..3).random().toFloat(), // Скорость зависит от ползунка
-                            type = R.drawable.ic_author // Заглушка, позже заменим на ресурсы жуков
+                            y = (100..(screenHeight - 100).toInt()).random().toFloat(),
+                            dx = speed * dirX,
+                            dy = speed * dirY,
+                            type = R.drawable.ic_author
                         )
                     )
                 }
-                delay((1000 - (speedSetting * 50)).toLong().coerceAtLeast(300)) // Чем выше скорость, тем чаще спавн
+                delay((1000 - (speedSetting * 50)).toLong().coerceAtLeast(300))
             }
         }
 
-        // Движение жуков
         LaunchedEffect(isGameOver) {
             while (!isGameOver) {
                 for (i in activeBugs.indices.reversed()) {
                     val bug = activeBugs[i]
-                    val newY = bug.y + bug.speed
-                    if (newY > screenHeight + 50) {
-                        activeBugs.removeAt(i)
-                    } else {
-                        activeBugs[i] = bug.copy(y = newY)
+                    var newX = bug.x + bug.dx
+                    var newY = bug.y + bug.dy
+                    var newDx = bug.dx
+                    var newDy = bug.dy
+
+                    if (newX <= 0f || newX >= screenWidth - 50f) {
+                        newDx = -newDx
+                        newX = newX.coerceIn(0f, screenWidth - 50f)
                     }
+                    if (newY <= 60f || newY >= screenHeight - 50f) {
+                        newDy = -newDy
+                        newY = newY.coerceIn(60f, screenHeight - 50f)
+                    }
+
+                    if ((1..100).random() > 98) newDx = -newDx
+                    if ((1..100).random() > 98) newDy = -newDy
+
+                    activeBugs[i] = bug.copy(x = newX, y = newY, dx = newDx, dy = newDy)
                 }
                 delay(16)
             }
         }
 
-        // Отрисовка
         activeBugs.toList().forEach { bug ->
             Image(
                 painter = painterResource(id = bug.type),
@@ -418,7 +428,6 @@ fun GameScreen(
             )
         }
 
-        // Экран конца игры
         if (isGameOver) {
             Box(
                 modifier = Modifier
