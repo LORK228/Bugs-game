@@ -102,11 +102,21 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainScreen() {
-    // Состояние для переключения между меню и игрой
+    // Состояния настроек (вынесли сюда, чтобы передавать в игру)
+    var speedSetting by remember { mutableIntStateOf(5) }
+    var maxCockroaches by remember { mutableIntStateOf(20) }
+    var bonusInterval by remember { mutableIntStateOf(10) }
+    var roundDuration by remember { mutableIntStateOf(60) }
+
     var isGameRunning by remember { mutableStateOf(false) }
 
     if (isGameRunning) {
-        GameScreen(onExit = { isGameRunning = false })
+        GameScreen(
+            speedSetting = speedSetting,
+            maxCockroaches = maxCockroaches,
+            roundDuration = roundDuration,
+            onExit = { isGameRunning = false }
+        )
     } else {
         val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
         val pagerState = rememberPagerState(pageCount = { tabs.size })
@@ -134,11 +144,15 @@ fun MainScreen() {
                     .weight(1f)
             ) { page ->
                 when (page) {
-                    // Передаем коллбэк для запуска игры в регистрацию
                     0 -> RegistrationTab(onStartGame = { isGameRunning = true })
                     1 -> RulesTab()
                     2 -> AuthorsTab()
-                    3 -> SettingsTab()
+                    3 -> SettingsTab(
+                        speed = speedSetting, onSpeedChange = { speedSetting = it },
+                        maxBugs = maxCockroaches, onMaxBugsChange = { maxCockroaches = it },
+                        bonusInt = bonusInterval, onBonusIntChange = { bonusInterval = it },
+                        duration = roundDuration, onDurationChange = { roundDuration = it }
+                    )
                 }
             }
         }
@@ -302,24 +316,42 @@ fun RegistrationTab(onStartGame: () -> Unit) {
 }
 
 @Composable
-fun GameScreen(onExit: () -> Unit) {
+fun GameScreen(
+    speedSetting: Int,
+    maxCockroaches: Int,
+    roundDuration: Int,
+    onExit: () -> Unit
+) {
     var score by remember { mutableIntStateOf(0) }
+    var timeLeft by remember { mutableIntStateOf(roundDuration) }
+    var isGameOver by remember { mutableStateOf(false) }
     val activeBugs = remember { mutableStateListOf<Bug>() }
+
+    // Таймер игры
+    LaunchedEffect(isGameOver) {
+        if (!isGameOver) {
+            while (timeLeft > 0) {
+                delay(1000)
+                timeLeft--
+            }
+            isGameOver = true
+        }
+    }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null // Убирает эффект волны при клике
+                indication = null
             ) {
-                score -= 5 // Штраф за промах
+                if (!isGameOver) score -= 5 // Штраф только если игра идет
             }
     ) {
         val screenWidth = maxWidth.value
         val screenHeight = maxHeight.value
 
-        // Верхняя панель: Очки и кнопка выхода
+        // Верхняя панель: Очки, Таймер и Выход
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -327,44 +359,46 @@ fun GameScreen(onExit: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Очки: $score", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("Очки: $score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Время: $timeLeft", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (timeLeft <= 10) androidx.compose.ui.graphics.Color.Red else androidx.compose.ui.graphics.Color.Black)
             Button(onClick = onExit) { Text("Выйти") }
         }
 
-        // 1. Появление новых жуков
-        LaunchedEffect(Unit) {
-            while (true) {
-                if (activeBugs.size < 15) { // Максимальное количество жуков
+        // Спавн жуков (с учетом настроек)
+        LaunchedEffect(isGameOver) {
+            while (!isGameOver) {
+                if (activeBugs.size < maxCockroaches) {
+                    val baseSpeed = speedSetting.toFloat()
                     activeBugs.add(
                         Bug(
                             x = (0..(screenWidth - 50).toInt()).random().toFloat(),
-                            y = -100f, // Появляются за экраном сверху
-                            speed = (3..10).random().toFloat(),
-                            type = R.drawable.ic_author // Пока используем эту картинку, потом заменишь на жука
+                            y = -100f,
+                            speed = baseSpeed + (0..3).random().toFloat(), // Скорость зависит от ползунка
+                            type = R.drawable.ic_author // Заглушка, позже заменим на ресурсы жуков
                         )
                     )
                 }
-                delay(800) // Интервал появления
+                delay((1000 - (speedSetting * 50)).toLong().coerceAtLeast(300)) // Чем выше скорость, тем чаще спавн
             }
         }
 
-        // 2. Движение жуков вниз
-        LaunchedEffect(Unit) {
-            while (true) {
+        // Движение жуков
+        LaunchedEffect(isGameOver) {
+            while (!isGameOver) {
                 for (i in activeBugs.indices.reversed()) {
                     val bug = activeBugs[i]
                     val newY = bug.y + bug.speed
                     if (newY > screenHeight + 50) {
-                        activeBugs.removeAt(i) // Удаление при выходе за экран
+                        activeBugs.removeAt(i)
                     } else {
                         activeBugs[i] = bug.copy(y = newY)
                     }
                 }
-                delay(16) // Частота кадров (~60 FPS)
+                delay(16)
             }
         }
 
-        // 3. Отрисовка насекомых и обработка попаданий
+        // Отрисовка
         activeBugs.toList().forEach { bug ->
             Image(
                 painter = painterResource(id = bug.type),
@@ -376,10 +410,32 @@ fun GameScreen(onExit: () -> Unit) {
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        score += 10 // Начисление очков за попадание
-                        activeBugs.remove(bug)
+                        if (!isGameOver) {
+                            score += 10
+                            activeBugs.remove(bug)
+                        }
                     }
             )
+        }
+
+        // Экран конца игры
+        if (isGameOver) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("ВРЕМЯ ВЫШЛО!", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Итоговый счет: $score", fontSize = 24.sp)
+                    Spacer(Modifier.height(32.dp))
+                    Button(onClick = onExit, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                        Text("Вернуться в меню", fontSize = 18.sp)
+                    }
+                }
+            }
         }
     }
 }
@@ -424,22 +480,22 @@ fun AuthorRow(author: Author) {
 }
 
 @Composable
-fun SettingsTab() {
-    var speed by remember { mutableIntStateOf(5) }
-    var maxCockroaches by remember { mutableIntStateOf(20) }
-    var bonusInterval by remember { mutableIntStateOf(10) }
-    var roundDuration by remember { mutableIntStateOf(60) }
-
+fun SettingsTab(
+    speed: Int, onSpeedChange: (Int) -> Unit,
+    maxBugs: Int, onMaxBugsChange: (Int) -> Unit,
+    bonusInt: Int, onBonusIntChange: (Int) -> Unit,
+    duration: Int, onDurationChange: (Int) -> Unit
+) {
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        SettingSlider("Скорость игры", speed, 1..10, "ед.") { speed = it }
-        SettingSlider("Максимальное количество тараканов на экране", maxCockroaches, 1..50, "шт.") { maxCockroaches = it }
-        SettingSlider("Интервал появления бонусов", bonusInterval, 1..60, "сек") { bonusInterval = it }
-        SettingSlider("Длительность раунда", roundDuration, 10..300, "сек") { roundDuration = it }
+        SettingSlider("Скорость игры", speed, 1..10, "ед.", onSpeedChange)
+        SettingSlider("Максимальное количество тараканов", maxBugs, 1..50, "шт.", onMaxBugsChange)
+        SettingSlider("Интервал появления бонусов", bonusInt, 1..60, "сек", onBonusIntChange)
+        SettingSlider("Длительность раунда", duration, 10..300, "сек", onDurationChange)
     }
 }
 
