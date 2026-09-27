@@ -52,6 +52,14 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.launch
 
+data class Bug(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val x: Float,
+    val y: Float,
+    val speed: Float,
+    val type: Int // R.drawable.твоя_картинка_жука
+)
+
 data class PlayerProfile(
     val fullName: String,
     val gender: String,
