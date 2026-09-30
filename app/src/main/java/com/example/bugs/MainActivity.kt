@@ -46,6 +46,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
@@ -60,14 +62,37 @@ import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+enum class BugType(
+    val label: String,
+    val sizeDp: Int,
+    val speed: Float,
+    val cost: Int,
+    val tint: Color
+) {
+    COMMON("Обычный", 50, 3f, 10, Color(0xFF795548)),
+    FAST("Быстрый", 38, 6f, 20, Color(0xFFE53935)),
+    RARE("Редкий", 64, 1.5f, 50, Color(0xFFF9A825))
+}
+
 data class Bug(
     val id: String = java.util.UUID.randomUUID().toString(),
     val x: Float,
     val y: Float,
     val dx: Float,
     val dy: Float,
-    val type: Int
+    val size: Int,
+    val type: BugType,
+    val cost: Int
 )
+
+private fun randomBugType(): BugType {
+    val roll = (1..100).random()
+    return when {
+        roll <= 60 -> BugType.COMMON
+        roll <= 85 -> BugType.FAST
+        else -> BugType.RARE
+    }
+}
 
 data class PlayerProfile(
     val fullName: String,
@@ -322,9 +347,20 @@ fun GameScreen(
     onExit: () -> Unit
 ) {
     var score by remember { mutableIntStateOf(0) }
+    var hits by remember { mutableIntStateOf(0) }
+    var misses by remember { mutableIntStateOf(0) }
     var timeLeft by remember { mutableIntStateOf(roundDuration) }
     var isGameOver by remember { mutableStateOf(false) }
     val activeBugs = remember { mutableStateListOf<Bug>() }
+
+    fun restartGame() {
+        activeBugs.clear()
+        score = 0
+        hits = 0
+        misses = 0
+        timeLeft = roundDuration
+        isGameOver = false
+    }
 
     LaunchedEffect(isGameOver) {
         if (!isGameOver) {
@@ -343,7 +379,10 @@ fun GameScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
-                if (!isGameOver) score -= 5
+                if (!isGameOver) {
+                    score -= 5
+                    misses++
+                }
             }
     ) {
         val screenWidth = maxWidth.value
@@ -364,17 +403,24 @@ fun GameScreen(
         LaunchedEffect(isGameOver) {
             while (!isGameOver) {
                 if (activeBugs.size < maxCockroaches) {
-                    val speed = speedSetting.toFloat() + (0..3).random().toFloat()
+                    val type = randomBugType()
+                    val speed = type.speed * (0.6f + speedSetting * 0.1f)
                     val dirX = if (java.util.Random().nextBoolean()) 1f else -1f
                     val dirY = if (java.util.Random().nextBoolean()) 1f else -1f
 
+                    val maxX = (screenWidth - type.sizeDp).toInt().coerceAtLeast(1)
+                    val minY = 100
+                    val maxY = (screenHeight - type.sizeDp - 20).toInt().coerceAtLeast(minY)
+
                     activeBugs.add(
                         Bug(
-                            x = (0..(screenWidth - 50).toInt()).random().toFloat(),
-                            y = (100..(screenHeight - 100).toInt()).random().toFloat(),
+                            x = (0..maxX).random().toFloat(),
+                            y = (minY..maxY).random().toFloat(),
                             dx = speed * dirX,
                             dy = speed * dirY,
-                            type = R.drawable.ic_author
+                            size = type.sizeDp,
+                            type = type,
+                            cost = type.cost
                         )
                     )
                 }
@@ -386,18 +432,19 @@ fun GameScreen(
             while (!isGameOver) {
                 for (i in activeBugs.indices.reversed()) {
                     val bug = activeBugs[i]
+                    val sizeF = bug.size.toFloat()
                     var newX = bug.x + bug.dx
                     var newY = bug.y + bug.dy
                     var newDx = bug.dx
                     var newDy = bug.dy
 
-                    if (newX <= 0f || newX >= screenWidth - 50f) {
+                    if (newX <= 0f || newX >= screenWidth - sizeF) {
                         newDx = -newDx
-                        newX = newX.coerceIn(0f, screenWidth - 50f)
+                        newX = newX.coerceIn(0f, screenWidth - sizeF)
                     }
-                    if (newY <= 60f || newY >= screenHeight - 50f) {
+                    if (newY <= 60f || newY >= screenHeight - sizeF) {
                         newDy = -newDy
-                        newY = newY.coerceIn(60f, screenHeight - 50f)
+                        newY = newY.coerceIn(60f, screenHeight - sizeF)
                     }
 
                     if ((1..100).random() > 98) newDx = -newDx
@@ -411,17 +458,19 @@ fun GameScreen(
 
         activeBugs.toList().forEach { bug ->
             Image(
-                painter = painterResource(id = bug.type),
-                contentDescription = "Жук",
+                painter = painterResource(id = R.drawable.ic_author),
+                contentDescription = "Жук: ${bug.type.label}",
+                colorFilter = ColorFilter.tint(bug.type.tint),
                 modifier = Modifier
                     .absoluteOffset(x = bug.x.dp, y = bug.y.dp)
-                    .size(50.dp)
+                    .size(bug.size.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
                         if (!isGameOver) {
-                            score += 10
+                            score += bug.cost
+                            hits++
                             activeBugs.remove(bug)
                         }
                     }
@@ -429,6 +478,7 @@ fun GameScreen(
         }
 
         if (isGameOver) {
+            val accuracy = if (hits + misses > 0) hits * 100 / (hits + misses) else 0
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -437,9 +487,17 @@ fun GameScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("ВРЕМЯ ВЫШЛО!", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Итоговый счет: $score", fontSize = 24.sp)
+                    Spacer(Modifier.height(24.dp))
+                    Text("Очки: $score", fontSize = 24.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Попадания: $hits", fontSize = 20.sp)
+                    Text("Промахи: $misses", fontSize = 20.sp)
+                    Text("Точность: $accuracy%", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(32.dp))
+                    Button(onClick = { restartGame() }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                        Text("Играть снова", fontSize = 18.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
                     Button(onClick = onExit, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                         Text("Вернуться в меню", fontSize = 18.sp)
                     }
