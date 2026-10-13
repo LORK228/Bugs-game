@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -57,8 +59,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.bugs.ui.theme.BugsTheme
 import java.util.Calendar
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -331,7 +331,9 @@ fun RegistrationTab(onStartGame: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         Button(
             onClick = onStartGame,
-            modifier = Modifier.fillMaxWidth().height(56.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
         ) {
             Text("НАЧАТЬ ИГРУ", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
@@ -396,7 +398,12 @@ fun GameScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("Очки: $score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("Время: $timeLeft", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (timeLeft <= 10) androidx.compose.ui.graphics.Color.Red else androidx.compose.ui.graphics.Color.Black)
+            Text(
+                "Время: $timeLeft",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (timeLeft <= 10) Color.Red else Color.Black
+            )
             Button(onClick = onExit) { Text("Выйти") }
         }
 
@@ -458,7 +465,7 @@ fun GameScreen(
 
         activeBugs.toList().forEach { bug ->
             Image(
-                painter = painterResource(id = R.drawable.ic_author),
+                painter = painterResource(id = R.drawable.bug),
                 contentDescription = "Жук: ${bug.type.label}",
                 colorFilter = ColorFilter.tint(bug.type.tint),
                 modifier = Modifier
@@ -494,11 +501,21 @@ fun GameScreen(
                     Text("Промахи: $misses", fontSize = 20.sp)
                     Text("Точность: $accuracy%", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(32.dp))
-                    Button(onClick = { restartGame() }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                    Button(
+                        onClick = { restartGame() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                    ) {
                         Text("Играть снова", fontSize = 18.sp)
                     }
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = onExit, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                    Button(
+                        onClick = onExit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                    ) {
                         Text("Вернуться в меню", fontSize = 18.sp)
                     }
                 }
