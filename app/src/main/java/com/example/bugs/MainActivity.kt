@@ -1,5 +1,6 @@
 package com.example.bugs
 
+import android.content.Context
 import android.os.Bundle
 import android.webkit.WebView
 import android.widget.CalendarView
@@ -29,6 +30,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
@@ -45,6 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,10 +61,98 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
 import com.example.bugs.ui.theme.BugsTheme
 import java.util.Calendar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@Entity(tableName = "players")
+data class PlayerEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fullName: String,
+    val gender: String,
+    val course: String,
+    val difficulty: Int,
+    val birthDate: String,
+    val zodiacSign: String
+)
+
+@Entity(tableName = "records")
+data class RecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val playerId: Long,
+    val score: Int,
+    val difficulty: Int,
+    val hits: Int,
+    val misses: Int,
+    val accuracy: Int,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class RecordWithPlayer(
+    val id: Long,
+    val playerName: String,
+    val score: Int,
+    val difficulty: Int,
+    val hits: Int,
+    val misses: Int,
+    val accuracy: Int
+)
+
+@Dao
+interface AppDao {
+    @Insert
+    suspend fun insertPlayer(player: PlayerEntity): Long
+
+    @Query("SELECT * FROM players ORDER BY fullName ASC")
+    suspend fun getAllPlayers(): List<PlayerEntity>
+
+    @Insert
+    suspend fun insertRecord(record: RecordEntity): Long
+
+    @Query(
+        """
+        SELECT records.id, players.fullName AS playerName, records.score, 
+               records.difficulty, records.hits, records.misses, records.accuracy
+        FROM records
+        INNER JOIN players ON records.playerId = players.id
+        ORDER BY records.score DESC
+        """
+    )
+    suspend fun getAllRecords(): List<RecordWithPlayer>
+}
+
+@Database(entities = [PlayerEntity::class, RecordEntity::class], version = 1, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun appDao(): AppDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "bugs_game_database"
+                ).build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
 
 enum class BugType(
     val label: String,
@@ -94,15 +186,6 @@ private fun randomBugType(): BugType {
     }
 }
 
-data class PlayerProfile(
-    val fullName: String,
-    val gender: String,
-    val course: String,
-    val difficulty: Int,
-    val birthDate: String,
-    val zodiacSign: String
-)
-
 data class Author(
     val name: String,
     val photoRes: Int
@@ -118,35 +201,39 @@ private val authors = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val database = AppDatabase.getDatabase(this)
         setContent {
             BugsTheme {
-                MainScreen()
+                MainScreen(database)
             }
         }
     }
 }
 
 @Composable
-fun MainScreen() {
+fun MainScreen(database: AppDatabase) {
     var speedSetting by remember { mutableIntStateOf(5) }
     var maxCockroaches by remember { mutableIntStateOf(20) }
     var bonusInterval by remember { mutableIntStateOf(10) }
     var roundDuration by remember { mutableIntStateOf(60) }
 
+    var currentPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
     var isGameRunning by remember { mutableStateOf(false) }
 
-    if (isGameRunning) {
+    val tabs = listOf("Регистрация", "Рекорды", "Правила", "Авторы", "Настройки")
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
+    val coroutineScope = rememberCoroutineScope()
+
+    if (isGameRunning && currentPlayer != null) {
         GameScreen(
+            player = currentPlayer!!,
             speedSetting = speedSetting,
             maxCockroaches = maxCockroaches,
             roundDuration = roundDuration,
+            database = database,
             onExit = { isGameRunning = false }
         )
     } else {
-        val tabs = listOf("Регистрация", "Правила", "Авторы", "Настройки")
-        val pagerState = rememberPagerState(pageCount = { tabs.size })
-        val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
-
         Column(Modifier.fillMaxSize()) {
             TabRow(selectedTabIndex = pagerState.currentPage) {
                 tabs.forEachIndexed { index, title ->
@@ -157,7 +244,7 @@ fun MainScreen() {
                                 pagerState.animateScrollToPage(index)
                             }
                         },
-                        text = { Text(title) }
+                        text = { Text(title, fontSize = 13.sp) }
                     )
                 }
             }
@@ -169,10 +256,16 @@ fun MainScreen() {
                     .weight(1f)
             ) { page ->
                 when (page) {
-                    0 -> RegistrationTab(onStartGame = { isGameRunning = true })
-                    1 -> RulesTab()
-                    2 -> AuthorsTab()
-                    3 -> SettingsTab(
+                    0 -> RegistrationTab(
+                        database = database,
+                        selectedPlayer = currentPlayer,
+                        onPlayerSelected = { currentPlayer = it },
+                        onStartGame = { isGameRunning = true }
+                    )
+                    1 -> RecordsTab(database = database)
+                    2 -> RulesTab()
+                    3 -> AuthorsTab()
+                    4 -> SettingsTab(
                         speed = speedSetting, onSpeedChange = { speedSetting = it },
                         maxBugs = maxCockroaches, onMaxBugsChange = { maxCockroaches = it },
                         bonusInt = bonusInterval, onBonusIntChange = { bonusInterval = it },
@@ -185,8 +278,18 @@ fun MainScreen() {
 }
 
 @Composable
-fun RegistrationTab(onStartGame: () -> Unit) {
+fun RegistrationTab(
+    database: AppDatabase,
+    selectedPlayer: PlayerEntity?,
+    onPlayerSelected: (PlayerEntity) -> Unit,
+    onStartGame: () -> Unit
+) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var existingPlayers by remember { mutableStateOf<List<PlayerEntity>>(emptyList()) }
+    var playerDropdownExpanded by remember { mutableStateOf(false) }
+
     var fullName by remember { mutableStateOf("") }
     var isMale by remember { mutableStateOf(true) }
     var course by remember { mutableStateOf(courses.first()) }
@@ -201,12 +304,47 @@ fun RegistrationTab(onStartGame: () -> Unit) {
     var zodiacRes by remember { mutableIntStateOf(0) }
     var result by remember { mutableStateOf("") }
 
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            existingPlayers = database.appDao().getAllPlayers()
+        }
+    }
+
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        Text("Выбор существующего игрока:", fontWeight = FontWeight.Bold)
+        Box {
+            OutlinedButton(
+                onClick = { playerDropdownExpanded = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(selectedPlayer?.fullName ?: if (existingPlayers.isEmpty()) "Нет сохраненных игроков" else "Выберите игрока")
+            }
+            DropdownMenu(
+                expanded = playerDropdownExpanded,
+                onDismissRequest = { playerDropdownExpanded = false }
+            ) {
+                existingPlayers.forEach { player ->
+                    DropdownMenuItem(
+                        text = { Text(player.fullName) },
+                        onClick = {
+                            onPlayerSelected(player)
+                            playerDropdownExpanded = false
+                            result = "Выбран игрок: ${player.fullName}"
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Или зарегистрируйте нового:", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+
         Text("ФИО игрока:", fontWeight = FontWeight.Bold)
         OutlinedTextField(
             value = fullName,
@@ -287,7 +425,7 @@ fun RegistrationTab(onStartGame: () -> Unit) {
                     val (zodiacName, zodiacImageRes) = getZodiacInfo(day, month)
                     zodiacRes = zodiacImageRes
 
-                    val player = PlayerProfile(
+                    val newPlayer = PlayerEntity(
                         fullName = fullName,
                         gender = gender,
                         course = course,
@@ -296,20 +434,22 @@ fun RegistrationTab(onStartGame: () -> Unit) {
                         zodiacSign = zodiacName
                     )
 
-                    result = """
-                        Игрок зарегистрирован:
-                        • ФИО: ${player.fullName}
-                        • Пол: ${player.gender}
-                        • Курс: ${player.course}
-                        • Сложность: ${player.difficulty}
-                        • Дата рождения: ${player.birthDate}
-                        • Знак зодиака: ${player.zodiacSign}
-                    """.trimIndent()
+                    coroutineScope.launch {
+                        val insertedId = withContext(Dispatchers.IO) {
+                            database.appDao().insertPlayer(newPlayer)
+                        }
+                        val savedPlayer = newPlayer.copy(id = insertedId)
+                        onPlayerSelected(savedPlayer)
+                        withContext(Dispatchers.IO) {
+                            existingPlayers = database.appDao().getAllPlayers()
+                        }
+                        result = "Игрок сохранен в БД: ${savedPlayer.fullName}"
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Зарегистрировать игрока")
+            Text("Зарегистрировать и сохранить")
         }
 
         Spacer(Modifier.height(16.dp))
@@ -330,7 +470,13 @@ fun RegistrationTab(onStartGame: () -> Unit) {
 
         Spacer(Modifier.height(24.dp))
         Button(
-            onClick = onStartGame,
+            onClick = {
+                if (selectedPlayer == null) {
+                    Toast.makeText(context, "Выберите или зарегистрируйте игрока!", Toast.LENGTH_SHORT).show()
+                } else {
+                    onStartGame()
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
@@ -342,17 +488,62 @@ fun RegistrationTab(onStartGame: () -> Unit) {
 }
 
 @Composable
+fun RecordsTab(database: AppDatabase) {
+    var records by remember { mutableStateOf<List<RecordWithPlayer>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            records = database.appDao().getAllRecords()
+        }
+    }
+
+    if (records.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Пока нет сохраненных рекордов", fontSize = 18.sp)
+        }
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+            items(records) { record ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(record.playerName, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("${record.score} очков", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("Сложность: ${record.difficulty} | Точность: ${record.accuracy}%")
+                        Text("Попадания: ${record.hits} | Промахи: ${record.misses}", fontSize = 14.sp, color = Color.Gray)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun GameScreen(
+    player: PlayerEntity,
     speedSetting: Int,
     maxCockroaches: Int,
     roundDuration: Int,
+    database: AppDatabase,
     onExit: () -> Unit
 ) {
+    val coroutineScope = rememberCoroutineScope()
     var score by remember { mutableIntStateOf(0) }
     var hits by remember { mutableIntStateOf(0) }
     var misses by remember { mutableIntStateOf(0) }
     var timeLeft by remember { mutableIntStateOf(roundDuration) }
     var isGameOver by remember { mutableStateOf(false) }
+    var recordSaved by remember { mutableStateOf(false) }
     val activeBugs = remember { mutableStateListOf<Bug>() }
 
     fun restartGame() {
@@ -362,6 +553,7 @@ fun GameScreen(
         misses = 0
         timeLeft = roundDuration
         isGameOver = false
+        recordSaved = false
     }
 
     LaunchedEffect(isGameOver) {
@@ -371,6 +563,24 @@ fun GameScreen(
                 timeLeft--
             }
             isGameOver = true
+        }
+    }
+
+    LaunchedEffect(isGameOver) {
+        if (isGameOver && !recordSaved) {
+            recordSaved = true
+            val accuracy = if (hits + misses > 0) hits * 100 / (hits + misses) else 0
+            val record = RecordEntity(
+                playerId = player.id,
+                score = score,
+                difficulty = player.difficulty,
+                hits = hits,
+                misses = misses,
+                accuracy = accuracy
+            )
+            withContext(Dispatchers.IO) {
+                database.appDao().insertRecord(record)
+            }
         }
     }
 
@@ -397,7 +607,10 @@ fun GameScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Очки: $score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Column {
+                Text("Игрок: ${player.fullName}", fontSize = 14.sp)
+                Text("Очки: $score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            }
             Text(
                 "Время: $timeLeft",
                 fontSize = 20.sp,
@@ -494,28 +707,19 @@ fun GameScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("ВРЕМЯ ВЫШЛО!", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Итоговый счет: $score", fontSize = 24.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Попадания: $hits", fontSize = 18.sp)
+                    Text("Промахи: $misses", fontSize = 18.sp)
+                    Text("Точность: $accuracy%", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Результат сохранен в БД!", fontSize = 16.sp, color = Color(0xFF2E7D32))
                     Spacer(Modifier.height(24.dp))
-                    Text("Очки: $score", fontSize = 24.sp)
-                    Spacer(Modifier.height(12.dp))
-                    Text("Попадания: $hits", fontSize = 20.sp)
-                    Text("Промахи: $misses", fontSize = 20.sp)
-                    Text("Точность: $accuracy%", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(32.dp))
-                    Button(
-                        onClick = { restartGame() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                    ) {
+                    Button(onClick = { restartGame() }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                         Text("Играть снова", fontSize = 18.sp)
                     }
                     Spacer(Modifier.height(12.dp))
-                    Button(
-                        onClick = onExit,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                    ) {
+                    Button(onClick = onExit, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                         Text("Вернуться в меню", fontSize = 18.sp)
                     }
                 }
