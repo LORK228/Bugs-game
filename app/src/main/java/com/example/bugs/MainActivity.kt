@@ -1,6 +1,11 @@
 package com.example.bugs
 
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.webkit.WebView
 import android.widget.CalendarView
@@ -42,8 +47,10 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -214,7 +221,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(database: AppDatabase) {
     var speedSetting by remember { mutableIntStateOf(5) }
     var maxCockroaches by remember { mutableIntStateOf(20) }
-    var bonusInterval by remember { mutableIntStateOf(10) }
+    var bonusInterval by remember { mutableIntStateOf(15) }
     var roundDuration by remember { mutableIntStateOf(60) }
 
     var currentPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
@@ -229,6 +236,7 @@ fun MainScreen(database: AppDatabase) {
             player = currentPlayer!!,
             speedSetting = speedSetting,
             maxCockroaches = maxCockroaches,
+            bonusInterval = bonusInterval,
             roundDuration = roundDuration,
             database = database,
             onExit = { isGameRunning = false }
@@ -528,15 +536,19 @@ fun RecordsTab(database: AppDatabase) {
     }
 }
 
+data class BonusItem(val x: Float, val y: Float)
+
 @Composable
 fun GameScreen(
     player: PlayerEntity,
     speedSetting: Int,
     maxCockroaches: Int,
+    bonusInterval: Int,
     roundDuration: Int,
     database: AppDatabase,
     onExit: () -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var score by remember { mutableIntStateOf(0) }
     var hits by remember { mutableIntStateOf(0) }
@@ -546,6 +558,37 @@ fun GameScreen(
     var recordSaved by remember { mutableStateOf(false) }
     val activeBugs = remember { mutableStateListOf<Bug>() }
 
+    val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
+    var gravityX by remember { mutableFloatStateOf(0f) }
+    var gravityY by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(Unit) {
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                gravityX = -event.values[0]
+                gravityY = event.values[1]
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        onDispose {
+            sensorManager.unregisterListener(listener)
+        }
+    }
+
+    val mediaPlayer = remember { MediaPlayer.create(context, R.raw.bug_scream) }
+    DisposableEffect(Unit) {
+        onDispose {
+            mediaPlayer?.release()
+        }
+    }
+
+    var isGravityBonusActive by remember { mutableStateOf(false) }
+    var gravityBonusTimeLeft by remember { mutableIntStateOf(0) }
+    var currentBonus by remember { mutableStateOf<BonusItem?>(null) }
+    var timeUntilNextBonus by remember { mutableIntStateOf(bonusInterval) }
+
     fun restartGame() {
         activeBugs.clear()
         score = 0
@@ -554,16 +597,9 @@ fun GameScreen(
         timeLeft = roundDuration
         isGameOver = false
         recordSaved = false
-    }
-
-    LaunchedEffect(isGameOver) {
-        if (!isGameOver) {
-            while (timeLeft > 0) {
-                delay(1000)
-                timeLeft--
-            }
-            isGameOver = true
-        }
+        isGravityBonusActive = false
+        currentBonus = null
+        timeUntilNextBonus = bonusInterval
     }
 
     LaunchedEffect(isGameOver) {
@@ -599,6 +635,31 @@ fun GameScreen(
     ) {
         val screenWidth = maxWidth.value
         val screenHeight = maxHeight.value
+
+        LaunchedEffect(isGameOver) {
+            if (!isGameOver) {
+                while (timeLeft > 0) {
+                    delay(1000)
+                    timeLeft--
+                    
+                    if (isGravityBonusActive) {
+                        gravityBonusTimeLeft--
+                        if (gravityBonusTimeLeft <= 0) {
+                            isGravityBonusActive = false
+                        }
+                    }
+
+                    timeUntilNextBonus--
+                    if (timeUntilNextBonus <= 0 && currentBonus == null && !isGravityBonusActive) {
+                        val bx = (50..screenWidth.toInt().coerceAtLeast(100) - 50).random().toFloat()
+                        val by = (100..screenHeight.toInt().coerceAtLeast(200) - 50).random().toFloat()
+                        currentBonus = BonusItem(bx, by)
+                        timeUntilNextBonus = bonusInterval
+                    }
+                }
+                isGameOver = true
+            }
+        }
 
         Row(
             modifier = Modifier
@@ -648,15 +709,26 @@ fun GameScreen(
             }
         }
 
-        LaunchedEffect(isGameOver) {
+        LaunchedEffect(isGameOver, isGravityBonusActive) {
             while (!isGameOver) {
                 for (i in activeBugs.indices.reversed()) {
                     val bug = activeBugs[i]
                     val sizeF = bug.size.toFloat()
-                    var newX = bug.x + bug.dx
-                    var newY = bug.y + bug.dy
                     var newDx = bug.dx
                     var newDy = bug.dy
+
+                    if (isGravityBonusActive) {
+                        newDx += gravityX * 0.5f
+                        newDy += gravityY * 0.5f
+                        newDx *= 0.95f
+                        newDy *= 0.95f
+                    } else {
+                        if ((1..100).random() > 98) newDx = -newDx
+                        if ((1..100).random() > 98) newDy = -newDy
+                    }
+
+                    var newX = bug.x + newDx
+                    var newY = bug.y + newDy
 
                     if (newX <= 0f || newX >= screenWidth - sizeF) {
                         newDx = -newDx
@@ -667,13 +739,31 @@ fun GameScreen(
                         newY = newY.coerceIn(60f, screenHeight - sizeF)
                     }
 
-                    if ((1..100).random() > 98) newDx = -newDx
-                    if ((1..100).random() > 98) newDy = -newDy
-
                     activeBugs[i] = bug.copy(x = newX, y = newY, dx = newDx, dy = newDy)
                 }
                 delay(16)
             }
+        }
+
+        currentBonus?.let { bonus ->
+            Image(
+                painter = painterResource(android.R.drawable.star_big_on),
+                contentDescription = "Бонус",
+                modifier = Modifier
+                    .absoluteOffset(x = bonus.x.dp, y = bonus.y.dp)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (!isGameOver) {
+                            currentBonus = null
+                            isGravityBonusActive = true
+                            gravityBonusTimeLeft = 5 // Бонус длится 5 секунд
+                            mediaPlayer?.start()
+                        }
+                    }
+            )
         }
 
         activeBugs.toList().forEach { bug ->
