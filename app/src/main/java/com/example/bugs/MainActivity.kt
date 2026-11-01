@@ -76,12 +76,14 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.bugs.network.CbrNetworkClient
 import com.example.bugs.ui.theme.BugsTheme
 import java.util.Calendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Random
 
 @Entity(tableName = "players")
 data class PlayerEntity(
@@ -170,7 +172,8 @@ enum class BugType(
 ) {
     COMMON("Обычный", 50, 3f, 10, Color(0xFF795548)),
     FAST("Быстрый", 38, 6f, 20, Color(0xFFE53935)),
-    RARE("Редкий", 64, 1.5f, 50, Color(0xFFF9A825))
+    RARE("Редкий", 64, 1.5f, 50, Color(0xFFF9A825)),
+    GOLD("Золотой", 56, 4.5f, 100, Color(0xFFFFD700))
 }
 
 data class Bug(
@@ -208,6 +211,10 @@ private val authors = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Принудительно обновляем виджет свежими данными из сети
+        GoldBallWidgetProvider.updateAllWidgets(this)
+
         val database = AppDatabase.getDatabase(this)
         setContent {
             BugsTheme {
@@ -589,6 +596,14 @@ fun GameScreen(
     var currentBonus by remember { mutableStateOf<BonusItem?>(null) }
     var timeUntilNextBonus by remember { mutableIntStateOf(bonusInterval) }
 
+    var goldPrice by remember { mutableFloatStateOf(8500f) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            goldPrice = CbrNetworkClient.fetchGoldPrice()
+        }
+    }
+
     fun restartGame() {
         activeBugs.clear()
         score = 0
@@ -679,6 +694,35 @@ fun GameScreen(
                 color = if (timeLeft <= 10) Color.Red else Color.Black
             )
             Button(onClick = onExit) { Text("Выйти") }
+        }
+
+        LaunchedEffect(isGameOver) {
+            while (!isGameOver) {
+                delay(20_000L) // Каждые 20 секунд
+                if (!isGameOver) {
+                    val goldType = BugType.GOLD
+                    val dynamicGoldCost = (goldPrice / 100f).toInt().coerceAtLeast(50)
+                    val speed = goldType.speed * (0.6f + speedSetting * 0.1f)
+                    val dirX = if (Random().nextBoolean()) 1f else -1f
+                    val dirY = if (Random().nextBoolean()) 1f else -1f
+
+                    val maxX = (screenWidth - goldType.sizeDp).toInt().coerceAtLeast(1)
+                    val minY = 100
+                    val maxY = (screenHeight - goldType.sizeDp - 20).toInt().coerceAtLeast(minY)
+
+                    activeBugs.add(
+                        Bug(
+                            x = (0..maxX).random().toFloat(),
+                            y = (minY..maxY).random().toFloat(),
+                            dx = speed * dirX,
+                            dy = speed * dirY,
+                            size = goldType.sizeDp,
+                            type = goldType,
+                            cost = dynamicGoldCost
+                        )
+                    )
+                }
+            }
         }
 
         LaunchedEffect(isGameOver) {
