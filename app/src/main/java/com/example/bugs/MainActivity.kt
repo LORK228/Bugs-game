@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,11 +79,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.bugs.network.CbrNetworkClient
 import com.example.bugs.ui.theme.BugsTheme
+import com.example.bugs.viewmodel.GameViewModel
 import java.util.Calendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 import java.util.Random
 
 @Entity(tableName = "players")
@@ -187,15 +191,6 @@ data class Bug(
     val cost: Int
 )
 
-private fun randomBugType(): BugType {
-    val roll = (1..100).random()
-    return when {
-        roll <= 60 -> BugType.COMMON
-        roll <= 85 -> BugType.FAST
-        else -> BugType.RARE
-    }
-}
-
 data class Author(
     val name: String,
     val photoRes: Int
@@ -211,42 +206,39 @@ private val authors = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Принудительно обновляем виджет свежими данными из сети
         GoldBallWidgetProvider.updateAllWidgets(this)
 
-        val database = AppDatabase.getDatabase(this)
         setContent {
             BugsTheme {
-                MainScreen(database)
+                MainScreen()
             }
         }
     }
 }
 
 @Composable
-fun MainScreen(database: AppDatabase) {
-    var speedSetting by remember { mutableIntStateOf(5) }
-    var maxCockroaches by remember { mutableIntStateOf(20) }
-    var bonusInterval by remember { mutableIntStateOf(15) }
-    var roundDuration by remember { mutableIntStateOf(60) }
-
-    var currentPlayer by remember { mutableStateOf<PlayerEntity?>(null) }
-    var isGameRunning by remember { mutableStateOf(false) }
+fun MainScreen(
+    database: AppDatabase = koinInject(),
+    viewModel: GameViewModel = koinViewModel()
+) {
+    var speedSetting by rememberSaveable { mutableIntStateOf(5) }
+    var maxCockroaches by rememberSaveable { mutableIntStateOf(20) }
+    var bonusInterval by rememberSaveable { mutableIntStateOf(15) }
+    var roundDuration by rememberSaveable { mutableIntStateOf(60) }
 
     val tabs = listOf("Регистрация", "Рекорды", "Правила", "Авторы", "Настройки")
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val coroutineScope = rememberCoroutineScope()
 
-    if (isGameRunning && currentPlayer != null) {
+    if (viewModel.isGameRunning && viewModel.currentPlayer != null) {
         GameScreen(
-            player = currentPlayer!!,
+            player = viewModel.currentPlayer!!,
             speedSetting = speedSetting,
             maxCockroaches = maxCockroaches,
             bonusInterval = bonusInterval,
             roundDuration = roundDuration,
-            database = database,
-            onExit = { isGameRunning = false }
+            onExit = { viewModel.stopSession() },
+            viewModel = viewModel
         )
     } else {
         Column(Modifier.fillMaxSize()) {
@@ -273,9 +265,13 @@ fun MainScreen(database: AppDatabase) {
                 when (page) {
                     0 -> RegistrationTab(
                         database = database,
-                        selectedPlayer = currentPlayer,
-                        onPlayerSelected = { currentPlayer = it },
-                        onStartGame = { isGameRunning = true }
+                        selectedPlayer = viewModel.currentPlayer,
+                        onPlayerSelected = { viewModel.currentPlayer = it },
+                        onStartGame = {
+                            viewModel.currentPlayer?.let { player ->
+                                viewModel.startSession(player)
+                            }
+                        }
                     )
                     1 -> RecordsTab(database = database)
                     2 -> RulesTab()
@@ -543,8 +539,6 @@ fun RecordsTab(database: AppDatabase) {
     }
 }
 
-data class BonusItem(val x: Float, val y: Float)
-
 @Composable
 fun GameScreen(
     player: PlayerEntity,
@@ -552,86 +546,26 @@ fun GameScreen(
     maxCockroaches: Int,
     bonusInterval: Int,
     roundDuration: Int,
-    database: AppDatabase,
-    onExit: () -> Unit
+    onExit: () -> Unit,
+    viewModel: GameViewModel = koinViewModel()
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    var score by remember { mutableIntStateOf(0) }
-    var hits by remember { mutableIntStateOf(0) }
-    var misses by remember { mutableIntStateOf(0) }
-    var timeLeft by remember { mutableIntStateOf(roundDuration) }
-    var isGameOver by remember { mutableStateOf(false) }
-    var recordSaved by remember { mutableStateOf(false) }
-    val activeBugs = remember { mutableStateListOf<Bug>() }
-
     val sensorManager = remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
-    var gravityX by remember { mutableFloatStateOf(0f) }
-    var gravityY by remember { mutableFloatStateOf(0f) }
+    val mediaPlayer = remember { MediaPlayer.create(context, R.raw.bug_scream) }
 
     DisposableEffect(Unit) {
         val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
-                gravityX = -event.values[0]
-                gravityY = event.values[1]
+                viewModel.gravityX = -event.values[0]
+                viewModel.gravityY = event.values[1]
             }
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
         sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
         onDispose {
             sensorManager.unregisterListener(listener)
-        }
-    }
-
-    val mediaPlayer = remember { MediaPlayer.create(context, R.raw.bug_scream) }
-    DisposableEffect(Unit) {
-        onDispose {
             mediaPlayer?.release()
-        }
-    }
-
-    var isGravityBonusActive by remember { mutableStateOf(false) }
-    var gravityBonusTimeLeft by remember { mutableIntStateOf(0) }
-    var currentBonus by remember { mutableStateOf<BonusItem?>(null) }
-    var timeUntilNextBonus by remember { mutableIntStateOf(bonusInterval) }
-
-    var goldPrice by remember { mutableFloatStateOf(8500f) }
-
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            goldPrice = CbrNetworkClient.fetchGoldPrice()
-        }
-    }
-
-    fun restartGame() {
-        activeBugs.clear()
-        score = 0
-        hits = 0
-        misses = 0
-        timeLeft = roundDuration
-        isGameOver = false
-        recordSaved = false
-        isGravityBonusActive = false
-        currentBonus = null
-        timeUntilNextBonus = bonusInterval
-    }
-
-    LaunchedEffect(isGameOver) {
-        if (isGameOver && !recordSaved) {
-            recordSaved = true
-            val accuracy = if (hits + misses > 0) hits * 100 / (hits + misses) else 0
-            val record = RecordEntity(
-                playerId = player.id,
-                score = score,
-                difficulty = player.difficulty,
-                hits = hits,
-                misses = misses,
-                accuracy = accuracy
-            )
-            withContext(Dispatchers.IO) {
-                database.appDao().insertRecord(record)
-            }
         }
     }
 
@@ -641,39 +575,22 @@ fun GameScreen(
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
-            ) {
-                if (!isGameOver) {
-                    score -= 5
-                    misses++
-                }
-            }
+            ) { viewModel.onScreenClick() }
     ) {
         val screenWidth = maxWidth.value
         val screenHeight = maxHeight.value
 
-        LaunchedEffect(isGameOver) {
-            if (!isGameOver) {
-                while (timeLeft > 0) {
-                    delay(1000)
-                    timeLeft--
-                    
-                    if (isGravityBonusActive) {
-                        gravityBonusTimeLeft--
-                        if (gravityBonusTimeLeft <= 0) {
-                            isGravityBonusActive = false
-                        }
-                    }
-
-                    timeUntilNextBonus--
-                    if (timeUntilNextBonus <= 0 && currentBonus == null && !isGravityBonusActive) {
-                        val bx = (50..screenWidth.toInt().coerceAtLeast(100) - 50).random().toFloat()
-                        val by = (100..screenHeight.toInt().coerceAtLeast(200) - 50).random().toFloat()
-                        currentBonus = BonusItem(bx, by)
-                        timeUntilNextBonus = bonusInterval
-                    }
-                }
-                isGameOver = true
-            }
+        LaunchedEffect(screenWidth, screenHeight) {
+            viewModel.updateScreenDimensions(screenWidth, screenHeight)
+            viewModel.startGame(
+                player = player,
+                speedSetting = speedSetting,
+                maxCockroaches = maxCockroaches,
+                bonusInterval = bonusInterval,
+                roundDuration = roundDuration,
+                width = screenWidth,
+                height = screenHeight
+            )
         }
 
         Row(
@@ -685,111 +602,18 @@ fun GameScreen(
         ) {
             Column {
                 Text("Игрок: ${player.fullName}", fontSize = 14.sp)
-                Text("Очки: $score", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Очки: ${viewModel.score}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             Text(
-                "Время: $timeLeft",
+                "Время: ${viewModel.timeLeft}",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (timeLeft <= 10) Color.Red else Color.Black
+                color = if (viewModel.timeLeft <= 10) Color.Red else Color.Black
             )
             Button(onClick = onExit) { Text("Выйти") }
         }
 
-        LaunchedEffect(isGameOver) {
-            while (!isGameOver) {
-                delay(20_000L) // Каждые 20 секунд
-                if (!isGameOver) {
-                    val goldType = BugType.GOLD
-                    val dynamicGoldCost = (goldPrice / 100f).toInt().coerceAtLeast(50)
-                    val speed = goldType.speed * (0.6f + speedSetting * 0.1f)
-                    val dirX = if (Random().nextBoolean()) 1f else -1f
-                    val dirY = if (Random().nextBoolean()) 1f else -1f
-
-                    val maxX = (screenWidth - goldType.sizeDp).toInt().coerceAtLeast(1)
-                    val minY = 100
-                    val maxY = (screenHeight - goldType.sizeDp - 20).toInt().coerceAtLeast(minY)
-
-                    activeBugs.add(
-                        Bug(
-                            x = (0..maxX).random().toFloat(),
-                            y = (minY..maxY).random().toFloat(),
-                            dx = speed * dirX,
-                            dy = speed * dirY,
-                            size = goldType.sizeDp,
-                            type = goldType,
-                            cost = dynamicGoldCost
-                        )
-                    )
-                }
-            }
-        }
-
-        LaunchedEffect(isGameOver) {
-            while (!isGameOver) {
-                if (activeBugs.size < maxCockroaches) {
-                    val type = randomBugType()
-                    val speed = type.speed * (0.6f + speedSetting * 0.1f)
-                    val dirX = if (java.util.Random().nextBoolean()) 1f else -1f
-                    val dirY = if (java.util.Random().nextBoolean()) 1f else -1f
-
-                    val maxX = (screenWidth - type.sizeDp).toInt().coerceAtLeast(1)
-                    val minY = 100
-                    val maxY = (screenHeight - type.sizeDp - 20).toInt().coerceAtLeast(minY)
-
-                    activeBugs.add(
-                        Bug(
-                            x = (0..maxX).random().toFloat(),
-                            y = (minY..maxY).random().toFloat(),
-                            dx = speed * dirX,
-                            dy = speed * dirY,
-                            size = type.sizeDp,
-                            type = type,
-                            cost = type.cost
-                        )
-                    )
-                }
-                delay((1000 - (speedSetting * 50)).toLong().coerceAtLeast(300))
-            }
-        }
-
-        LaunchedEffect(isGameOver, isGravityBonusActive) {
-            while (!isGameOver) {
-                for (i in activeBugs.indices.reversed()) {
-                    val bug = activeBugs[i]
-                    val sizeF = bug.size.toFloat()
-                    var newDx = bug.dx
-                    var newDy = bug.dy
-
-                    if (isGravityBonusActive) {
-                        newDx += gravityX * 0.5f
-                        newDy += gravityY * 0.5f
-                        newDx *= 0.95f
-                        newDy *= 0.95f
-                    } else {
-                        if ((1..100).random() > 98) newDx = -newDx
-                        if ((1..100).random() > 98) newDy = -newDy
-                    }
-
-                    var newX = bug.x + newDx
-                    var newY = bug.y + newDy
-
-                    if (newX <= 0f || newX >= screenWidth - sizeF) {
-                        newDx = -newDx
-                        newX = newX.coerceIn(0f, screenWidth - sizeF)
-                    }
-                    if (newY <= 60f || newY >= screenHeight - sizeF) {
-                        newDy = -newDy
-                        newY = newY.coerceIn(60f, screenHeight - sizeF)
-                    }
-
-                    activeBugs[i] = bug.copy(x = newX, y = newY, dx = newDx, dy = newDy)
-                }
-                delay(16)
-            }
-        }
-
-        currentBonus?.let { bonus ->
+        viewModel.currentBonus?.let { bonus ->
             Image(
                 painter = painterResource(android.R.drawable.star_big_on),
                 contentDescription = "Бонус",
@@ -800,17 +624,14 @@ fun GameScreen(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        if (!isGameOver) {
-                            currentBonus = null
-                            isGravityBonusActive = true
-                            gravityBonusTimeLeft = 5 // Бонус длится 5 секунд
+                        if (viewModel.onBonusClick()) {
                             mediaPlayer?.start()
                         }
                     }
             )
         }
 
-        activeBugs.toList().forEach { bug ->
+        viewModel.activeBugs.toList().forEach { bug ->
             Image(
                 painter = painterResource(id = R.drawable.bug),
                 contentDescription = "Жук: ${bug.type.label}",
@@ -821,18 +642,15 @@ fun GameScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) {
-                        if (!isGameOver) {
-                            score += bug.cost
-                            hits++
-                            activeBugs.remove(bug)
-                        }
-                    }
+                    ) { viewModel.onBugClick(bug) }
             )
         }
 
-        if (isGameOver) {
-            val accuracy = if (hits + misses > 0) hits * 100 / (hits + misses) else 0
+        if (viewModel.isGameOver) {
+            val accuracy = if (viewModel.hits + viewModel.misses > 0) {
+                viewModel.hits * 100 / (viewModel.hits + viewModel.misses)
+            } else 0
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -842,14 +660,25 @@ fun GameScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("ВРЕМЯ ВЫШЛО!", fontSize = 32.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(16.dp))
-                    Text("Итоговый счет: $score", fontSize = 24.sp)
+                    Text("Итоговый счет: ${viewModel.score}", fontSize = 24.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text("Попадания: $hits", fontSize = 18.sp)
-                    Text("Промахи: $misses", fontSize = 18.sp)
+                    Text("Попадания: ${viewModel.hits}", fontSize = 18.sp)
+                    Text("Промахи: ${viewModel.misses}", fontSize = 18.sp)
                     Text("Точность: $accuracy%", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text("Результат сохранен в БД!", fontSize = 16.sp, color = Color(0xFF2E7D32))
                     Spacer(Modifier.height(24.dp))
-                    Button(onClick = { restartGame() }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                    Button(
+                        onClick = {
+                            viewModel.restartGame(
+                                player,
+                                speedSetting,
+                                maxCockroaches,
+                                bonusInterval,
+                                roundDuration
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
                         Text("Играть снова", fontSize = 18.sp)
                     }
                     Spacer(Modifier.height(12.dp))

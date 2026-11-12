@@ -1,5 +1,6 @@
 package com.example.bugs.network
 
+import android.annotation.SuppressLint
 import android.util.Log
 import android.util.Xml
 import okhttp3.OkHttpClient
@@ -11,10 +12,15 @@ import retrofit2.http.Headers
 import retrofit2.http.Query
 import java.io.StringReader
 import java.nio.charset.Charset
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 interface CbrApiService {
     @Headers(
@@ -31,15 +37,34 @@ interface CbrApiService {
 object CbrNetworkClient {
     private const val BASE_URL = "https://www.cbr.ru/"
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
+    // Настройка доверия к сертификатам ЦБ РФ
+    @SuppressLint("CustomX509TrustManager")
+    private fun getUnsafeOkHttpClient(): OkHttpClient {
+        val trustAllCerts = arrayOf<TrustManager>(
+            @SuppressLint("TrustAllX509TrustManager")
+            object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+        )
+
+        val sslContext = SSLContext.getInstance("SSL").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+
+        return OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            .hostnameVerifier { _, _ -> true } // Пропускаем проверку имени хоста для cbr.ru
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     val service: CbrApiService by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(okHttpClient)
+            .client(getUnsafeOkHttpClient())
             .build()
             .create(CbrApiService::class.java)
     }
@@ -50,18 +75,14 @@ object CbrNetworkClient {
             val calendar = Calendar.getInstance()
             val toDate = dateFormat.format(calendar.time)
 
-            // Берём диапазон 14 дней, чтобы точно захватить рабочие дни
             calendar.add(Calendar.DAY_OF_YEAR, -14)
             val fromDate = dateFormat.format(calendar.time)
 
             val responseBody = service.getMetallRatesRaw(fromDate, toDate)
-
-            // Читаем байты строго в кодировке windows-1251, которую отдает ЦБ
             val bytes = responseBody.bytes()
             val xmlString = String(bytes, Charset.forName("windows-1251"))
 
             Log.d("CBR_API", "XML Response length: ${xmlString.length}")
-
             parseLatestGoldPrice(xmlString) ?: 8500f
         } catch (e: Exception) {
             Log.e("CBR_API", "Ошибка запроса к ЦБ РФ", e)
@@ -78,7 +99,6 @@ object CbrNetworkClient {
         var currentBuy = ""
         var currentSell = ""
         var currentTag = ""
-
         var lastFoundPrice: Float? = null
 
         while (eventType != XmlPullParser.END_DOCUMENT) {
@@ -88,7 +108,7 @@ object CbrNetworkClient {
                     if (currentTag.equals("Record", ignoreCase = true)) {
                         currentCode = parser.getAttributeValue(null, "Code")
                             ?: parser.getAttributeValue(null, "code")
-                                    ?: ""
+                            ?: ""
                         currentBuy = ""
                         currentSell = ""
                     }
@@ -105,7 +125,6 @@ object CbrNetworkClient {
                 }
                 XmlPullParser.END_TAG -> {
                     if (parser.name.equals("Record", ignoreCase = true)) {
-                        // Код 1 = Золото
                         if (currentCode == "1") {
                             val priceStr = currentBuy.ifEmpty { currentSell }
                             val cleaned = priceStr
