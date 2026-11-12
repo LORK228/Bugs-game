@@ -176,7 +176,7 @@ enum class BugType(
 ) {
     COMMON("Обычный", 50, 3f, 10, Color(0xFF795548)),
     FAST("Быстрый", 38, 6f, 20, Color(0xFFE53935)),
-    RARE("Редкий", 64, 1.5f, 50, Color(0xFFF9A825)),
+    RARE("Редкий", 64, 1.5f, 50, Color(0xFF2561F9)),
     GOLD("Золотой", 56, 4.5f, 100, Color(0xFFFFD700))
 }
 
