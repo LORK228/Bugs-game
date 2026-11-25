@@ -42,6 +42,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -71,13 +72,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Delete
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.bugs.network.CbrNetworkClient
+import com.example.bugs.ui.LevelEditorTab
 import com.example.bugs.ui.theme.BugsTheme
 import com.example.bugs.viewmodel.GameViewModel
 import java.util.Calendar
@@ -122,6 +128,19 @@ data class RecordWithPlayer(
     val accuracy: Int
 )
 
+@Entity(tableName = "custom_levels")
+data class LevelEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val speed: Int,            // 1..10
+    val maxBugs: Int,          // 1..50
+    val roundDuration: Int,    // 10..300 сек
+    val bonusInterval: Int,    // 5..60 сек
+    val fastBugChance: Int,    // 0..70 %
+    val rareBugChance: Int,    // 0..40 %
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
 @Dao
 interface AppDao {
     @Insert
@@ -143,9 +162,24 @@ interface AppDao {
         """
     )
     suspend fun getAllRecords(): List<RecordWithPlayer>
+
+    @Query("SELECT * FROM custom_levels ORDER BY updatedAt DESC")
+    suspend fun getAllLevels(): List<LevelEntity>
+
+    @Query("SELECT * FROM custom_levels WHERE id = :id LIMIT 1")
+    suspend fun getLevelById(id: Long): LevelEntity?
+
+    @Insert
+    suspend fun insertLevel(level: LevelEntity): Long
+
+    @Update
+    suspend fun updateLevel(level: LevelEntity)
+
+    @Delete
+    suspend fun deleteLevel(level: LevelEntity)
 }
 
-@Database(entities = [PlayerEntity::class, RecordEntity::class], version = 1, exportSchema = false)
+@Database(entities = [PlayerEntity::class, RecordEntity::class, LevelEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun appDao(): AppDao
 
@@ -153,13 +187,35 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `custom_levels` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `speed` INTEGER NOT NULL,
+                        `maxBugs` INTEGER NOT NULL,
+                        `roundDuration` INTEGER NOT NULL,
+                        `bonusInterval` INTEGER NOT NULL,
+                        `fastBugChance` INTEGER NOT NULL,
+                        `rareBugChance` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "bugs_game_database"
-                ).build()
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
                 INSTANCE = instance
                 instance
             }
@@ -221,28 +277,30 @@ fun MainScreen(
     database: AppDatabase = koinInject(),
     viewModel: GameViewModel = koinViewModel()
 ) {
+    val context = LocalContext.current
     var speedSetting by rememberSaveable { mutableIntStateOf(5) }
     var maxCockroaches by rememberSaveable { mutableIntStateOf(20) }
     var bonusInterval by rememberSaveable { mutableIntStateOf(15) }
     var roundDuration by rememberSaveable { mutableIntStateOf(60) }
 
-    val tabs = listOf("Регистрация", "Рекорды", "Правила", "Авторы", "Настройки")
+    val tabs = listOf("Регистрация", "Рекорды", "Правила", "Авторы", "Настройки", "Уровни")
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val coroutineScope = rememberCoroutineScope()
 
     if (viewModel.isGameRunning && viewModel.currentPlayer != null) {
+        val level = viewModel.activeLevel
         GameScreen(
             player = viewModel.currentPlayer!!,
-            speedSetting = speedSetting,
-            maxCockroaches = maxCockroaches,
-            bonusInterval = bonusInterval,
-            roundDuration = roundDuration,
+            speedSetting = level?.speed ?: speedSetting,
+            maxCockroaches = level?.maxBugs ?: maxCockroaches,
+            bonusInterval = level?.bonusInterval ?: bonusInterval,
+            roundDuration = level?.roundDuration ?: roundDuration,
             onExit = { viewModel.stopSession() },
             viewModel = viewModel
         )
     } else {
         Column(Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = pagerState.currentPage) {
+            ScrollableTabRow(selectedTabIndex = pagerState.currentPage, edgePadding = 8.dp) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = pagerState.currentPage == index,
@@ -269,7 +327,7 @@ fun MainScreen(
                         onPlayerSelected = { viewModel.currentPlayer = it },
                         onStartGame = {
                             viewModel.currentPlayer?.let { player ->
-                                viewModel.startSession(player)
+                                viewModel.startSession(player, level = null)
                             }
                         }
                     )
@@ -281,6 +339,21 @@ fun MainScreen(
                         maxBugs = maxCockroaches, onMaxBugsChange = { maxCockroaches = it },
                         bonusInt = bonusInterval, onBonusIntChange = { bonusInterval = it },
                         duration = roundDuration, onDurationChange = { roundDuration = it }
+                    )
+                    5 -> LevelEditorTab(
+                        onPlayLevel = { level ->
+                            val player = viewModel.currentPlayer
+                            if (player == null) {
+                                Toast.makeText(
+                                    context,
+                                    "Сначала выберите или зарегистрируйте игрока",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                coroutineScope.launch { pagerState.animateScrollToPage(0) }
+                            } else {
+                                viewModel.startSession(player, level = level)
+                            }
+                        }
                     )
                 }
             }
@@ -603,6 +676,9 @@ fun GameScreen(
             Column {
                 Text("Игрок: ${player.fullName}", fontSize = 14.sp)
                 Text("Очки: ${viewModel.score}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                viewModel.activeLevel?.let { level ->
+                    Text("Уровень: ${level.name}", fontSize = 12.sp, color = Color(0xFF1565C0))
+                }
             }
             Text(
                 "Время: ${viewModel.timeLeft}",

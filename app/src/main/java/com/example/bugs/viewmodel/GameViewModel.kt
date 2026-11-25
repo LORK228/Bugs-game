@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.bugs.AppDatabase
 import com.example.bugs.Bug
 import com.example.bugs.BugType
+import com.example.bugs.LevelEntity
 import com.example.bugs.PlayerEntity
 import com.example.bugs.RecordEntity
 import com.example.bugs.network.CbrNetworkClient
@@ -20,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.bugs.levels.LevelPreviewCalculator
 import java.util.Random
 
 data class BonusItem(val x: Float, val y: Float)
@@ -28,16 +30,26 @@ class GameViewModel(
     private val database: AppDatabase
 ) : ViewModel() {
 
+    var activeLevel by mutableStateOf<LevelEntity?>(null)
+        private set
+
+    private var fastBugChance: Int = 25
+    private var rareBugChance: Int = 15
+
     var isGameRunning by mutableStateOf(false)
     var currentPlayer by mutableStateOf<PlayerEntity?>(null)
 
-    fun startSession(player: PlayerEntity) {
+    fun startSession(player: PlayerEntity, level: LevelEntity? = null) {
         currentPlayer = player
+        activeLevel = level
+        fastBugChance = level?.fastBugChance ?: 25
+        rareBugChance = level?.rareBugChance ?: 15
         isGameRunning = true
     }
 
     fun stopSession() {
         isGameRunning = false
+        activeLevel = null
     }
 
     var score by mutableIntStateOf(0)
@@ -144,11 +156,7 @@ class GameViewModel(
             while (!isGameOver) {
                 if (activeBugs.size < maxCockroaches && screenWidth > 0f) {
                     val roll = (1..100).random()
-                    val type = when {
-                        roll <= 60 -> BugType.COMMON
-                        roll <= 85 -> BugType.FAST
-                        else -> BugType.RARE
-                    }
+                    val type = LevelPreviewCalculator.pickBugType(fastBugChance, rareBugChance, roll)
                     val speed = type.speed * (0.6f + speedSetting * 0.1f)
                     val dirX = if (Random().nextBoolean()) 1f else -1f
                     val dirY = if (Random().nextBoolean()) 1f else -1f
