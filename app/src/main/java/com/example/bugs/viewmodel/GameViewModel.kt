@@ -50,6 +50,18 @@ class GameViewModel(
     fun stopSession() {
         isGameRunning = false
         activeLevel = null
+        isInitialized = false
+        isGameOver = false
+        timerJob?.cancel()
+        bugSpawnerJob?.cancel()
+        goldSpawnerJob?.cancel()
+        bugPhysicsJob?.cancel()
+        activeBugs.clear()
+        score = 0
+        hits = 0
+        misses = 0
+        isGravityBonusActive = false
+        currentBonus = null
     }
 
     var score by mutableIntStateOf(0)
